@@ -33,7 +33,7 @@ OpenSpec 管「做什么和为什么」，Superpowers 管「怎么做和做得�
 > **CodeGraph 安装**（colbymchenry/codegraph，按官方手册）：
 > ```bash
 > npm i -g @colbymchenry/codegraph     # 或 curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh
-> codegraph install --target=claude --yes   # 把 codegraph MCP 服务接入 Claude Code
+> codegraph install                    # 在一个新的终端中，运行安装程序以将 CodeGraph 连接到你使用AI agent
 > cd <your-project> && codegraph init       # 构建该项目的 .codegraph/ 索引（一次性；⚠️ MCP stdio 下不自动同步，apply 改动后须手动 `codegraph sync`）
 > ```
 > 其 MCP 服务**默认只暴露 `codegraph_explore` 一个工具**（单次调用已返回源码 + 调用链 + 影响面）。若需 `codegraph_search`/`callers`/`callees`/`impact` 等，给 MCP 服务设环境变量 `CODEGRAPH_MCP_TOOLS=explore,node,search,callers,callees,impact`，或直接用 CLI 等价命令（`codegraph query`/`callers`/`callees`/`impact`）。详见 SKILL.md「CodeGraph 工具面说明」。
@@ -41,8 +41,9 @@ OpenSpec 管「做什么和为什么」，Superpowers 管「怎么做和做得�
 > **Graphify 安装**（`graphifyy` 包，提供 `/graphify` Skill + CLI）：
 > ```bash
 > uv tool install graphifyy        # 或 pip install graphifyy
-> cd <your-project>
-> /graphify openspec               # 构建文档知识图谱 → graphify-out/graph.json
+> graphify install                 # 在你的AI中注册该技能
+> cd <your-project>                # 进入项目目录
+> /graphify openspec               # 对openspec目录构建文档知识图谱 → graphify-out/graph.json
 > graphify query "<问题>"          # 语义检索历史规格；path/explain/update/merge-graphs 见 --help
 > ```
 > **无需任何外部 API key**：`/graphify` 默认用 Claude Code 子代理做语义抽取，仅当设了 `GEMINI_API_KEY`/`GOOGLE_API_KEY` 才改走 Gemini API。增量合并/清理用 Python API `graphify.build.build_merge(new_chunks, graph_path, prune_sources=...)`。详见 SKILL.md「Graphify 工具面说明」。
