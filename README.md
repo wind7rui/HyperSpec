@@ -1,5 +1,7 @@
 # HyperSpec
 
+> v1.1.0 · [更新日志](CHANGELOG.md)
+
 规格驱动 + 工程纪律的完整开发工作流 Skill，协调 [OpenSpec](https://github.com/fission-ai/openspec)（规格管理）和 [Superpowers](https://github.com/obra/superpowers)（TDD + 子代理审查），从需求到实现到归档一条流程走完。
 
 OpenSpec 管「做什么和为什么」，Superpowers 管「怎么做和做得对不对」。HyperSpec 是**轻量编排框架**：以编排 OpenSpec/Superpowers 为主（项目感知、状态检测、阶段路由、commit 纪律），不重写原生 skill 的功能；另含自有的规格一致性验证、计划质量审查等显式增强（不伪装为纯透传）。

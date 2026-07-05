@@ -1,5 +1,6 @@
 ---
 name: hyperspec
+version: 1.1.0
 description: 规格驱动+工程纪律的完整开发工作流。协调OpenSpec（规格管理）和Superpowers（TDD+子代理审查），从需求到实现到归档一条流程走完。当用户说「用hyperspec」「规格驱动开发」「完整流程开发功能」时触发。前提：需已安装Superpowers和OpenSpec。
 ---
 
