@@ -79,11 +79,24 @@
 - 严格遵循计划文件中每个 Step 的 checkbox 顺序
 - 每个 Task 完成后执行收尾流程
 
+**执行前知识感知（可选增强，两种模式通用）：**
+每个 Task 开始实现前，若 `project_profile.knowledge_graph.codegraph_available == true`，通过 CodeGraph 获取精确代码上下文：
+1. `codegraph_explore("目标文件/模块")` → 理解当前代码结构和目标位置
+2. `codegraph_impact("要修改的方法/符号")` → 评估本次 Task 的影响范围，将影响面信息作为实现约束纳入执行
+3. `codegraph_callers`/`codegraph_callees("要修改的方法")` → 了解所有调用者和方法行为，避免遗漏调用点
+
+轻量模式额外用 `codegraph_explore` + `codegraph_impact` 做精确代码导航，替代逐文件 Read。
+
+**知识图谱不可用时回退：** 使用现有 grep/Read 逐文件理解代码上下文。**运行时工具不可达（调用返回 *Unknown tool*/报错，如装了 CLI 但 MCP 未注入）同样触发回退**，并把 `codegraph_tool_reachable` 置 `false`——见 SKILL「运行时可达性规则」。
+
+> **CodeGraph 索引必须手动同步。** 实测在 MCP stdio 部署下，CodeGraph 的文件观察器**不会运行**——apply 修改代码后，索引仍是旧状态（`codegraph query` 查不到新符号，`codegraph_impact`/`callers` 返回过期调用链）。因此：**每个 Task 完成后、每个 fix 后、以及进入 archive 交叉验证前，都必须运行 CLI `codegraph sync`** 刷新索引。这是 apply 阶段的强制步骤，不是可选项（之前文档所称"默认自动增量同步、通常无需手动 sync"在 MCP stdio 下不成立）。`codegraph_explore` 是默认可用的 MCP 工具（内联 impact/callers/callees 结果），其余工具需 `CODEGRAPH_MCP_TOOLS` 启用或用 CLI 等价命令，详见 SKILL.md「CodeGraph 工具面说明」。
+
 **每个任务完成后的提交流程：**
 
 无论哪种执行模式，每个 task 完成后必须执行以下流程：
 
 1. **编译检查**：运行 `compile_command`，编译必须通过（如果 compile_command 为 null 则跳过）
+   - 若 `codegraph_available == true`：同步运行 CLI `codegraph sync` 刷新 CodeGraph 索引（MCP stdio 下观察器不运行，apply 改动不会自动入索引；不同步则后续 impact/callers 查询过期）
 2. **更新 checkbox**：用 Edit 工具将计划文件中**该 Task 下的所有** `- [ ]` 改为 `- [x]`（包括 Verify、Commit 等非实现步骤，不能遗漏）
 3. **更新状态文件**：更新 `.hyperspec-state.yaml` 的 `checkpoint: task-N-complete`
 4. **自动 commit**：将代码改动 + 计划文件变更 + 状态文件变更一起提交到本地仓库
@@ -105,9 +118,16 @@
 
 全部任务完成后，调用 Superpowers 的 `requesting-code-review` skill 做一轮全局代码审查。
 
-如果审查发现 Critical 或 Important 问题，逐项修复。每个 fix 完成后同样执行提交流程：
-1. 编译检查 → 必须通过
-2. 自动 commit → 格式：`fix(<范围>): <fix描述>`
+如果审查发现 Critical 或 Important 问题，逐项修复。每个 fix 的提交流程：
+1. **（如 `codegraph_available == true`）fix 前 sync**：运行 CLI `codegraph sync` 刷新索引——**必须在下面的 impact 之前**，确保影响面判断基于含本 fix 之前全部改动的最新索引。否则 fix-2 会在 fix-1 改动前、尚未 sync 的脏索引上做决策，使"验证调用链完整性"给出**虚假通过**。
+2. 编译检查 → 必须通过
+3. 自动 commit → 格式：`fix(<范围>): <fix描述>`
+
+**修复前影响面分析（如果 `project_profile.knowledge_graph.codegraph_available == true`）：**
+- 每个 fix 前：**先 `codegraph sync`**，再 `codegraph_impact` 评估修复的影响范围（sync 必须在 impact 前，否则 impact 基于过期索引）
+- 所有 fix 后：`codegraph_explore` 验证调用链完整性（若验证前刚 commit 了改动，同样先 sync 再 explore）
+
+**知识图谱不可用时回退：** 按现有方式逐项修复（凭经验判断影响面）。
 
 修复完成后回到 Step 2 重新验证，再重新审查，直到审查通过。
 

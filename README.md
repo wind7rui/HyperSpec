@@ -1,17 +1,20 @@
 # HyperSpec
 
+> v1.1.0 · [更新日志](CHANGELOG.md)
+
 规格驱动 + 工程纪律的完整开发工作流 Skill，协调 [OpenSpec](https://github.com/fission-ai/openspec)（规格管理）和 [Superpowers](https://github.com/obra/superpowers)（TDD + 子代理审查），从需求到实现到归档一条流程走完。
 
-OpenSpec 管「做什么和为什么」，Superpowers 管「怎么做和做得对不对」。HyperSpec 是**纯编排层**，只做项目感知、状态检测、阶段路由、commit 纪律，不重写任何原生 skill 的功能。
+OpenSpec 管「做什么和为什么」，Superpowers 管「怎么做和做得对不对」。HyperSpec 是**轻量编排框架**：以编排 OpenSpec/Superpowers 为主（项目感知、状态检测、阶段路由、commit 纪律），不重写原生 skill 的功能；另含自有的规格一致性验证、计划质量审查等显式增强（不伪装为纯透传）。
 
 ## 核心价值
 
 - **项目感知**：自动探测语言/框架/构建工具，自适应生成规格和执行策略
 - **需求先行**：强制先产出规格文档再写代码，避免 AI 闷头实现方向跑偏
-- **纯编排层**：不重写 OpenSpec/Superpowers 功能，只做调用和衔接
+- **轻量编排框架**：以编排 OpenSpec/Superpowers 为主，不重写其功能；另含自有的规格一致性验证等显式增强
 - **断点恢复**：结构化状态文件 + 实际文件双重验证，任何中断点可精确恢复
 - **智能执行**：根据任务数量、依赖关系、跨模块性等多因子选择最优执行模式
 - **多语言支持**：自动适配 Java/Node/Go/Rust/Python 等不同技术栈的编译和测试命令
+- **知识图谱感知（可选）**：叠加 CodeGraph（代码结构层）+ Graphify（文档知识层），提供调用链/影响面/历史规格的结构化检索；不可用时自动回退 grep/Read，核心流程不依赖知识图谱
 
 ## 前置依赖
 
@@ -19,6 +22,33 @@ OpenSpec 管「做什么和为什么」，Superpowers 管「怎么做和做得�
 |------|------|----------|----------|
 | **Superpowers** skill | TDD、计划编写、子代理开发、代码审查 | 检查 brainstorming 等 skill 是否可用 | `/plugin install superpowers@claude-plugins-official` |
 | **OpenSpec** CLI | 规格文档管理（变更提案、设计文档、任务拆分、归档） | 检查项目根目录是否有 `openspec/` | `npx @fission-ai/openspec init` |
+
+**可选依赖（知识图谱感知，不可用时自动降级为 grep/Read）：**
+
+| 依赖 | 用途 | 可用性检测（两态） |
+|------|------|----------|
+| **CodeGraph** MCP | 代码结构层：AST 解析 → 符号/调用链/依赖图/影响面，零 LLM 依赖 | ① `indexed`：`.codegraph/` 在不在（项目属性）② `tool_reachable`：试调 `codegraph_explore` 探活（会话属性，会失效） |
+| **Graphify** Skill/CLI | 文档知识层：对 `openspec/` 构建语义图谱，检索历史规格和归档经验 | ① `indexed`：`graphify-out/` 在不在（项目属性）② `tool_reachable`：试调 `graphify` CLI 探活（会话属性，会失效） |
+
+> 知识图谱工具是可选增强。可用性按**两态**判断：`indexed`（索引在不在，项目属性）与 `tool_reachable`（工具在当前会话调不调得通，会话属性），`available = 两者皆真`——用"目录在"推断"工具通"是范畴错误（装了 CLI 但没配 MCP 时目录在、工具却不可达）。未安装或检测不可用时标记 `available: false` 自动回退 grep/Read，不影响主流程；运行时若任一 KG 工具调用返回「Unknown tool / 工具不存在 / 连接错误」则立即判本次不可达、回退 grep/Read 并把 `tool_reachable` 置 `false`，堵死"目录在但 MCP 未注入 → 静默失败"。
+>
+> **CodeGraph 安装**（colbymchenry/codegraph，按官方手册）：
+> ```bash
+> npm i -g @colbymchenry/codegraph     # 或 curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh
+> codegraph install                    # 在一个新的终端中，运行安装程序以将 CodeGraph 连接到你使用AI agent
+> cd <your-project> && codegraph init       # 构建该项目的 .codegraph/ 索引（一次性；⚠️ MCP stdio 下不自动同步，apply 改动后须手动 `codegraph sync`）
+> ```
+> 其 MCP 服务**默认只暴露 `codegraph_explore` 一个工具**（单次调用已返回源码 + 调用链 + 影响面）。若需 `codegraph_search`/`callers`/`callees`/`impact` 等，给 MCP 服务设环境变量 `CODEGRAPH_MCP_TOOLS=explore,node,search,callers,callees,impact`，或直接用 CLI 等价命令（`codegraph query`/`callers`/`callees`/`impact`）。详见 SKILL.md「CodeGraph 工具面说明」。
+>
+> **Graphify 安装**（`graphifyy` 包，提供 `/graphify` Skill + CLI）：
+> ```bash
+> uv tool install graphifyy        # 或 pip install graphifyy
+> graphify install                 # 在你的AI中注册该技能
+> cd <your-project>                # 进入项目目录
+> /graphify openspec               # 对openspec目录构建文档知识图谱 → graphify-out/graph.json
+> graphify query "<问题>"          # 语义检索历史规格；path/explain/update/merge-graphs 见 --help
+> ```
+> **无需任何外部 API key**：`/graphify` 默认用 Claude Code 子代理做语义抽取，仅当设了 `GEMINI_API_KEY`/`GOOGLE_API_KEY` 才改走 Gemini API。增量合并/清理用 Python API `graphify.build.build_merge(new_chunks, graph_path, prune_sources=...)`。详见 SKILL.md「Graphify 工具面说明」。
 
 ## 安装
 
@@ -70,12 +100,13 @@ skill 会自动检测项目状态，判断应进入哪个阶段。你也可以�
 
 ## 编排协议
 
-HyperSpec 是**纯编排层**，只做以下四件事：
+HyperSpec 是**轻量编排框架**，以编排原生 skill 为主，核心职责如下（前四件为核心编排，第五件为可选叠加）：
 
 1. **项目感知** — 自动探测语言/框架/构建工具，生成 `project_profile` 驱动后续阶段的自适应行为
 2. **状态检测** — 通过结构化状态文件（`.hyperspec-state.yaml`）+ 实际文件验证确定当前阶段和断点位置
 3. **阶段路由** — 加载对应 prompt 文件，按其中的流程调用原生 skill
 4. **Commit 纪律** — 每个 task/fix 完成后自动 commit，编译前置，不做 push
+5. **知识感知（可选）** — 叠加 CodeGraph（代码结构）/Graphify（文档知识）做结构化知识检索，不可用时回退 grep/Read
 
 HyperSpec **不做**：
 
@@ -202,6 +233,13 @@ project_profile:
   test_command: mvn test
   structure: single-module
   has_ci: true
+  knowledge_graph:                   # 知识图谱可用性（可选增强；两态探测）
+    codegraph_available: true        # = indexed && tool_reachable（计算字段）
+    graphify_available: true         # = indexed && tool_reachable
+    codegraph_indexed: true          # 项目属性：.codegraph/ 已生成
+    codegraph_tool_reachable: true   # 会话属性：codegraph_explore MCP 真正可达（会失效，见运行时可达性规则）
+    graphify_indexed: true           # 项目属性：graphify-out/ 已生成
+    graphify_tool_reachable: true    # 会话属性：graphify CLI 可调
 ```
 
 **安全策略**：状态文件用于快速路由，但在关键节点验证实际文件状态。两者冲突时以实际文件为准。
@@ -257,6 +295,8 @@ HyperSpec 首次运行时自动探测项目特征：
 ```
 项目根目录/
 ├── .hyperspec-state.yaml           # 运行期间存在，完成后删除
+├── .codegraph/                     # 知识图谱：CodeGraph 代码结构层（可选，gitignore 不提交）
+├── graphify-out/                   # 知识图谱：Graphify 文档知识层（可选，gitignore 不提交）
 ├── openspec/
 │   ├── specs/                      # 主规格库（archive阶段合并）
 │   │   └── user-auth/
@@ -278,13 +318,14 @@ HyperSpec 首次运行时自动探测项目特征：
 
 ## 设计原则
 
-- **纯编排层：** HyperSpec 只做项目感知、状态检测、阶段路由、commit 纪律，不重写任何原生 skill 的功能
+- **轻量编排框架：** 以编排 OpenSpec/Superpowers 为主（项目感知、状态检测、阶段路由、commit 纪律），不重写原生 skill 功能；另含自有的规格一致性验证、计划质量审查等显式增强
 - **规格与实现分离：** propose 阶段只产出文档，apply 阶段只写代码，各自有硬门禁止越界
 - **项目感知自适应：** 根据项目技术栈自动调整编译命令、测试策略、执行模式
 - **每个阶段有明确出口条件：** 不满足出口条件就不能进入下一阶段
 - **可中断、可恢复：** 结构化状态文件 + 实际文件双重验证，支持从任何断点精确恢复
 - **用户意图优先：** 自动检测只是默认行为，用户显式指定阶段时以用户意图为准
 - **实际文件为 ground truth：** 状态文件是缓存，实际文件状态是权威，冲突时以实际文件为准
+- **知识图谱是可选增强：** CodeGraph/Graphify 作为透明叠加的知识感知层，所有知识查询都有 grep/Read 兜底，核心流程不依赖知识图谱，不可用时优雅降级
 
 ## 常见问题
 

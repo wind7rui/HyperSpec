@@ -1,0 +1,10 @@
+### Claude ###
+.claude
+
+### Mac OS ###
+.DS_Store
+**/.DS_Store
+
+### 知识图谱（可选增强，使用方在项目本地生成，不提交） ###
+.codegraph/
+graphify-out/
