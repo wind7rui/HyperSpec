@@ -27,6 +27,17 @@
 - 读取 `openspec/changes/<变更名>/tasks.md`，确认所有任务已完成
 - 将验证结果整理为一份清单，逐项标注「通过」或「不一致」
 
+**基于代码结构的交叉验证（如果 `project_profile.knowledge_graph.codegraph_available == true`）：**
+逐项验证每个技术方案点时，用 CodeGraph 做精确的交叉引用验证，替代/补充逐文件 Read：
+- `codegraph_search` 搜索 design.md 中提到的代码符号，定位其实现位置
+- `codegraph_callers`/`codegraph_callees` 验证调用链是否符合设计方案（如设计要求 A 调用 B，验证代码中确实存在该调用关系）
+- `codegraph_explore` 验证两个关键符号之间的调用路径（含跨模块/动态分派跳转）是否符合设计预期
+- 每项标注「通过」（调用链符合设计）或「不一致」（调用链缺失或偏离设计）
+
+> CodeGraph MCP 默认只暴露 `codegraph_explore`（内联 search/callers/callees/impact 结果与调用路径）；`search`/`callers`/`callees` 需 `CODEGRAPH_MCP_TOOLS` 启用或用 CLI 等价命令，未启用时统一用 `codegraph_explore`。详见 SKILL.md「CodeGraph 工具面说明」。
+
+**知识图谱不可用时回退：** 逐文件 Read 对比设计文档和代码（现有方式）。运行时工具不可达（Unknown tool/报错）同样回退，见 SKILL「运行时可达性规则」。
+
 验证维度：
 - design.md 中定义的技术方案是否全部实现
 - specs/ 中标记的 ADDED/MODIFIED/REMOVED 是否在代码中体现
@@ -76,13 +87,24 @@
 
 **注意：** `openspec-archive-change` 内部已包含用户确认环节（它用 AskUserQuestion 确认是否继续），不需要 HyperSpec 重复确认。但 Step 1 的验证结果应在调用 archive 前展示给用户。
 
-**降级方案：** 如果 `openspec-archive-change` skill 不可用（Skill 工具返回 "Unknown skill"），手动执行归档操作：
+**降级方案：** 如果 `openspec-archive-change` skill 不可用（Skill 工具返回 "Unknown skill"），**或 `openspec archive` CLI 卡在交互式确认（Y/n）、或因 spec 未用 `## ADDED/MODIFIED Requirements` delta 头被判"无 delta"无法自动合并规格**，手动执行归档操作：
 1. 确认 `openspec/changes/<变更名>/tasks.md` 中所有任务已标记为完成
 2. 运行 `mkdir -p openspec/changes/archive` 确保归档目录存在
 3. 运行 `mv openspec/changes/<变更名> openspec/changes/archive/$(date +%Y-%m-%d)-<变更名>` 执行归档
 4. 确认归档成功：活跃变更目录已移除，archive 目录已创建
 
+> **注**：openspec 1.3.1 的 `archive` 是交互式的，并要求 spec 用 `## ADDED/MODIFIED/REMOVED Requirements` delta 头（而非 `### Requirement:`）；不符会提示"无 delta"（非阻塞警告）。若规格未自动合并到 `openspec/specs/`，归档仍可经手动 `mv` 完成（知识图谱仅依赖归档目录的文件，不依赖 specs 合并）。
+
 完成后更新 `.hyperspec-state.yaml`：`checkpoint: archived`。
+
+**归档后知识更新（如果 `project_profile.knowledge_graph.graphify_available == true`）：**
+归档完成、变更已移入 `archive/` 后，触发 Graphify 增量更新，把本次变更沉淀到文档知识图谱，供后续变更语义检索复用：
+1. `graphify.build.build_merge([归档规格的抽取片段], graph_path)` — 将归档的新规格知识**只增不减**地增量合并到图谱（也可先 `/graphify openspec --update` 重抽取变更文件再合并）
+2. `build_merge(..., prune_sources=[<被移除的 source_file>])` — 按 `source_file` 精确清理活跃变更目录移除后产生的过期节点（缩图需 `to_json(..., force=True)` 确认；或 `graphify.build.prune_repo_from_graph` 按仓库标签清理）
+
+失败不影响归档结果（归档已完成，知识更新是可选增强）。
+
+**知识图谱不可用时回退：** 跳过知识更新。
 
 ### 4. 分支收尾 + 总结
 

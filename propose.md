@@ -23,6 +23,23 @@
 **空白项目（greenfield）处理：**
 如果是空项目（无源码、无配置），跳过分析，project_profile 保持默认空值。在需求确认步骤中一并确定技术栈，分析完成后补充 project_profile。
 
+**知识图谱初始化（可选增强）：**
+project_profile 写入后，检测并初始化知识图谱工具。任一失败都标记不可用并继续，不影响主流程：
+
+1. **CodeGraph（代码结构层）**：检测项目根目录是否有 `.codegraph/`
+   - 不存在 → 运行 CLI `codegraph init` 执行首次索引；成功则 `knowledge_graph.codegraph_available: true`、`codegraph_indexed: true`
+   - 存在 → 已就绪，标记可用（**注意：CodeGraph 在 MCP stdio 下不自动同步，apply 阶段每个 task 后须手动 `codegraph sync`**）
+   - 工具不可用/失败 → `codegraph_available: false`，后续回退 grep/Read
+2. **Graphify（文档知识层）**：检测项目根目录是否有 `graphify-out/`
+   - 不存在 → 先检查 `openspec/` 是否有规格文档：
+     - 有规格 → 调用 `/graphify openspec` Skill 构建知识图谱（无需外部 API key，默认用 Claude Code 子代理做语义抽取）；成功则 `graphify_available: true`、`graphify_indexed: true`
+     - **为空（greenfield，首次运行）→ 无法构建（无内容可索引），标记 `graphify_available: false`、`graphify_indexed: false`，推迟到 Step 3 规格生成后首次构建**
+   - 存在 → 已就绪，标记可用
+   - 工具不可用/失败 → `graphify_available: false`，后续回退文件读取
+3. 将检测结果写回 `.hyperspec-state.yaml` 的 `project_profile.knowledge_graph`
+
+> 详见 SKILL.md「知识图谱感知」段落。各后续步骤通过 `knowledge_graph.<tool>_available` 标记决定走 MCP 工具还是回退。
+
 ### 2. 需求确认
 
 与用户交互确认需求。规则：
@@ -46,6 +63,15 @@
 ### 3. 调用 openspec-propose 生成规格文档
 
 调用原生 `openspec-propose` skill，通过 CLI 创建变更并生成所有 artifacts。
+
+**历史规格检索（如果 `project_profile.knowledge_graph.graphify_available == true`）：**
+规格生成前，先从文档知识图谱检索相关历史经验，作为设计参考上下文：
+- 使用 `graphify query "<需求语义>"` 按语义遍历与本次需求相关的历史规格节点/关系（BFS/DFS，可 `--budget` 限 token）
+- **词表扩展（提升相关性）**：`graphify query` 的起点是词项匹配，中文小语料下相关性受词项重叠影响——查询前先用同义词/英文术语扩展问题（如"慢操作"补"latency/timeout/耗时阈值"），必要时加 `--dfs` 深度遍历；社区说明用 `graphify explain` 通常比 `query` 更稳
+- 使用 `graphify explain "<关键节点>"` 获取该节点及其邻居（聚类社区）的说明；或 `graphify path "A" "B"` 查两概念间最短路径
+- 将检索到的历史设计经验整理为「历史规格参考」，在调用 openspec-propose 时作为上下文附加到描述中，让规格文档复用既有设计经验
+
+**知识图谱不可用时回退：** 跳过历史检索，直接调用 openspec-propose（现有逻辑）。
 
 **做法：**
 
@@ -72,6 +98,14 @@
 
 完成后更新 `.hyperspec-state.yaml`：`checkpoint: openspec-generated`。
 
+**规格生成后的知识增量（Graphify）：**
+- **greenfield 首次构建**：若 Step 1 因 openspec 为空标记 `graphify_indexed: false`（但 Graphify 工具已安装），此时 openspec 已有本次规格 → 调用 `/graphify openspec` 完成首次构建，置 `graphify_available: true`、`graphify_indexed: true`
+- **常规增量合并**：若 `graphify_available == true` 且已建图 → 调用 `graphify.build.build_merge([本次规格的抽取片段], graph_path)` 将本次新增的规格文档（proposal/design/specs/tasks）**只增不减**地增量合并到文档知识图谱，使后续步骤和历史变更能语义检索到本次规格
+
+失败不影响主流程。
+
+**知识图谱不可用时回退：** 跳过增量合并。
+
 ### 4. 调用 writing-plans 生成实现计划
 
 调用 Superpowers 的 `writing-plans` skill，传入 openspec artifacts + project_profile 作为上下文。
@@ -84,11 +118,22 @@
    - `openspec/changes/<变更名>/design.md` — 技术方案
    - `openspec/changes/<变更名>/specs/` — 规格增量（所有 .md 文件）
    - `openspec/changes/<变更名>/tasks.md` — 任务清单（**作为权威任务分解，writing-plans 应基于此展开**）
-3. **准备 API 验证上下文**：扫描项目中已有的同类代码，提取关键框架 API 的实际签名，作为 writing-plans 的额外约束。方法：在项目中找到与本次变更同层的已有文件（如同模块的 Controller、Service、Handler 等），读取其中对框架工具类、第三方库的实际调用方式，重点关注：
+3. **准备 API 验证上下文**：提取关键框架 API 的实际签名，作为 writing-plans 的额外约束。重点关注：
    - 框架提供的工具方法是否存在多个重载（参数个数/类型不同），确认计划中应使用哪个签名
    - 第三方库的 import / require 路径是否与直觉不同（如包名重组后的新路径）
    - 构建工具在项目实际环境中的可用命令（如私有仓库可能限制增量编译，必须全量编译）
    - 将验证结果整理为"框架 API 注意事项"列表，附加到 writing-plans 的 args 中
+
+   **优先使用 CodeGraph（如果 `project_profile.knowledge_graph.codegraph_available == true`）：**
+   a. 使用 `codegraph_search` 搜索计划中涉及的框架类名/工具方法，获取所有使用位置
+   b. 使用 `codegraph_callers` 验证目标方法的调用签名和重载情况，确认计划应使用哪个签名
+   c. 使用 `codegraph_explore` 检查跨模块依赖关系，确认 import 路径与模块结构
+
+   > CodeGraph MCP 默认只暴露 `codegraph_explore`（单次调用已内联 search/callers/impact 的结果）。`search`/`callers` 需 `CODEGRAPH_MCP_TOOLS` 启用或用 CLI 等价命令（`codegraph query`/`callers`）；未启用时统一用 `codegraph_explore` 即可。**优先用单次 `codegraph_explore`** 一次性拿全 search+callers+impact，把 Step 4.3 控制在 1–2 次调用（§12 目标）；分查（多次 search/callers）实测约 3 次。详见 SKILL.md「CodeGraph 工具面说明」。
+
+   **知识图谱不可用时回退（现有逻辑）：**（运行时工具不可达/Unknown tool 同样回退，见 SKILL「运行时可达性规则」）
+   a. 在项目中 grep 找同类文件（同模块的 Controller、Service、Handler 等）
+   b. Read 提取其中对框架工具类、第三方库的实际调用签名
 4. 使用 Skill 工具调用 `superpowers:writing-plans`，args 传入上下文：
    ```
    变更名: <name>
@@ -107,10 +152,14 @@
    - 这确保 apply 阶段使用 Edit 工具更新 checkbox 时，old_string 在文件中唯一匹配
    框架 API 注意事项:
    <Step 3 中验证的实际 API 签名列表>
+   知识图谱上下文（如果对应工具可用，否则省略对应行）:
+   - 项目模块结构: <从 codegraph_explore 获取的模块依赖关系>
+   - API 验证结果: <从 codegraph_search/callers 获取的签名确认>
+   - 历史类似变更: <从 graphify query 获取的相关归档规格>
    openspec artifacts:
    <将上述文件内容拼接>
    ```
-   将完整 project_profile 信息、编译约束和 API 验证结果传入，让 writing-plans 从一开始就生成正确的任务分解，避免事后合并。
+   将完整 project_profile 信息、编译约束、API 验证结果和知识图谱上下文传入，让 writing-plans 从一开始就生成正确的任务分解，避免事后合并。
 5. writing-plans 会读取上下文，生成实现计划（File Structure 表 + 带 checkbox 的 TDD 微步骤），保存到 `superpowers/plans/YYYY-MM-DD-<变更名>.md`
 6. **跳过执行移交**：writing-plans 完成后会 offer 执行选择（Subagent-Driven / Inline）。在 HyperSpec 上下文中，跳过此 offer，直接回到本阶段 Step 5。
 7. 确认 `superpowers/plans/` 下有计划文件且包含至少 1 个 checkbox。如果没有 checkbox，说明 writing-plans 未能基于 tasks.md 展开步骤，需要重新执行并更明确地指定 "按 tasks.md 中的每个 Task 展开为 TDD 微步骤"。
